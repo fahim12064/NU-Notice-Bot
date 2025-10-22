@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 CSV_FILE_NAME = "scraped_notices.csv"
 USER_IDS_FILE = "user_ids.json"
 # অনুগ্রহ করে আপনার আসল টেলিগ্রাম বট টোকেন এখানে দিন
-TELEGRAM_BOT_TOKEN = "7976309371:AAE6FFKsxllfEUH7PrJk6tdjIXdSCGCspHk"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = "https://www.nu.ac.bd/"
 LAST_UPDATE_ID_FILE = "last_update_id.txt"
 
