@@ -28,7 +28,7 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Run MobileDokan Scraper
-        run: python nu_notice_bot.py
+        run: python nu_notice.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
