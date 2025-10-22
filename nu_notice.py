@@ -1,5 +1,4 @@
 import os
-import re
 import json
 import csv
 import requests
@@ -10,76 +9,58 @@ from urllib.parse import urljoin
 # --- Configuration ---
 CSV_FILE_NAME = "scraped_notices.csv"
 USER_IDS_FILE = "user_ids.json"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# অনুগ্রহ করে আপনার আসল টেলিগ্রাম বট টোকেন এখানে দিন
+TELEGRAM_BOT_TOKEN = "7976309371:AAE6FFKsxllfEUH7PrJk6tdjIXdSCGCspHk"
 BASE_URL = "https://www.nu.ac.bd/"
+LAST_UPDATE_ID_FILE = "last_update_id.txt"
+
 
 # ---------- Utility Functions ----------
 
 def load_user_ids():
-    """Load user IDs from JSON file"""
+    """JSON ফাইল থেকে ব্যবহারকারীর আইডি লোড করে।"""
     if not os.path.exists(USER_IDS_FILE):
         return set()
     try:
-        with open(USER_IDS_FILE, "r") as f:
-            content = f.read()
-            if not content:
-                return set()
-            return set(json.loads(content))
+        with open(USER_IDS_FILE, "r", encoding="utf-8") as f:
+            ids = json.load(f)
+            return {str(i) for i in ids}
     except (FileNotFoundError, json.JSONDecodeError):
         return set()
 
+
 def save_user_ids(user_ids):
-    """Save user IDs to JSON file"""
-    with open(USER_IDS_FILE, "w") as f:
-        json.dump(list(user_ids), f, indent=2)
+    """ব্যবহারকারীর আইডি JSON ফাইলে সেভ করে।"""
+    with open(USER_IDS_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(user_ids), f, indent=2, ensure_ascii=False)
 
-def load_last_update_data():
-    """Load last update ID and user data from file"""
-    last_update_file = "last_update_id.txt"
-    if not os.path.exists(last_update_file):
-        return 0, {}
-    
-    try:
-        with open(last_update_file, "r") as f:
-            lines = f.readlines()
-            if not lines:
-                return 0, {}
-            
-            last_update_id = int(lines[0].strip())
-            user_data = {}
-            
-            for line in lines[1:]:
-                if line.strip():
-                    parts = line.strip().split(',', 1)
-                    if len(parts) == 2:
-                        chat_id, name = parts
-                        user_data[chat_id] = name
-            
-            return last_update_id, user_data
-    except Exception as e:
-        print(f"Error reading last update data: {e}")
-        return 0, {}
 
-def save_last_update_data(last_update_id, user_data):
-    """Save last update ID and user data to file"""
-    last_update_file = "last_update_id.txt"
+def get_last_update_id():
+    """ফাইল থেকে সর্বশেষ আপডেট আইডি লোড করে।"""
+    if not os.path.exists(LAST_UPDATE_ID_FILE):
+        return 0
     try:
-        with open(last_update_file, "w") as f:
-            f.write(str(last_update_id) + "\n")
-            for chat_id, name in user_data.items():
-                f.write(f"{chat_id},{name}\n")
-    except Exception as e:
-        print(f"Error saving last update data: {e}")
+        with open(LAST_UPDATE_ID_FILE, "r") as f:
+            return int(f.read().strip())
+    except (ValueError, FileNotFoundError):
+        return 0
+
+
+def save_last_update_id(update_id):
+    """ফাইলে সর্বশেষ আপডেট আইডি সেভ করে।"""
+    with open(LAST_UPDATE_ID_FILE, "w") as f:
+        f.write(str(update_id))
+
 
 def handle_telegram_updates():
-    """Handle new Telegram users and save their data"""
+    """টেলিগ্রামের নতুন ব্যবহারকারীদের হ্যান্ডেল করে।"""
     if not TELEGRAM_BOT_TOKEN:
-        print("⚠️ Telegram bot token not set")
+        print("⚠️ টেলিগ্রাম বট টোকেন সেট করা নেই।")
         return
 
+    print("\n--- নতুন টেলিগ্রাম ব্যবহারকারী খোঁজা হচ্ছে ---")
     user_ids = load_user_ids()
-    last_update_id, user_data = load_last_update_data()
-
+    last_update_id = get_last_update_id()
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=10"
 
     try:
@@ -87,212 +68,177 @@ def handle_telegram_updates():
         response.raise_for_status()
         updates = response.json().get("result", [])
     except Exception as e:
-        print(f"❌ Telegram API error: {e}")
+        print(f"❌ টেলিগ্রাম API ত্রুটি: {e}")
         return
 
     if not updates:
-        print("👍 No new Telegram messages")
+        print("👍 কোনো নতুন টেলিগ্রাম বার্তা নেই।")
         return
 
     new_users_found = False
     max_update_id = last_update_id
-
     for update in updates:
         max_update_id = max(max_update_id, update["update_id"])
         msg = update.get("message", {})
-        text = msg.get("text", "")
-        chat = msg.get("chat", {})
-        chat_id = str(chat.get("id"))
-        first_name = msg.get("from", {}).get("first_name", "Friend")
-
-        if not chat_id or not text:
+        if not msg or "text" not in msg or "chat" not in msg:
             continue
 
-        if text.strip().lower() == "/start":
-            if chat_id not in user_ids:
-                user_ids.add(chat_id)
-                user_data[chat_id] = first_name
-                new_users_found = True
-                print(f"✅ New user registered: {chat_id} ({first_name})")
+        chat_id = str(msg["chat"]["id"])
+        if msg["text"].strip().lower() == "/start" and chat_id not in user_ids:
+            user_ids.add(chat_id)
+            new_users_found = True
+            first_name = msg.get("from", {}).get("first_name", "বন্ধু")
+            print(f"✅ নতুন ব্যবহারকারী রেজিস্টার করেছেন: {chat_id} ({first_name})")
+            # Welcome message
+            welcome_text = (
+                f"👋 স্বাগতম, {first_name}!\n\nআপনি এখন থেকে জাতীয় বিশ্ববিদ্যালয়ের নতুন নোটিশের জন্য নোটিফিকেশন পাবেন।")
+            try:
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                              json={"chat_id": chat_id, "text": welcome_text})
+            except Exception as e:
+                print(f"❌ স্বাগত বার্তা পাঠাতে ব্যর্থ: {e}")
 
-                # Send welcome message
-                welcome_text = (
-                    f"👋 Welcome, {first_name}!\n\n"
-                    "You are now subscribed to receive notifications "
-                    "for *new notices* from National University 📢✨\n\n"
-                    "You will receive notifications when new notices are published."
-                )
-
-                try:
-                    send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                    payload = {"chat_id": chat_id, "text": welcome_text, "parse_mode": "Markdown"}
-                    requests.post(send_url, json=payload, timeout=10)
-                except Exception as e:
-                    print(f"❌ Failed to send welcome message to {chat_id}: {e}")
-
-    # Save new users
     if new_users_found:
         save_user_ids(user_ids)
-        print(f"💾 Saved {len(user_ids)} total users to user_ids.json")
+        print(f"💾 মোট {len(user_ids)} জন ব্যবহারকারীকে user_ids.json ফাইলে সেভ করা হয়েছে।")
 
-    # Save last update ID and user data
-    save_last_update_data(max_update_id, user_data)
-    print("✅ Telegram updates and user data saved successfully")
+    save_last_update_id(max_update_id)
 
-def load_scraped_links_from_csv():
-    """Load scraped links from CSV file"""
+
+def load_scraped_urls_from_csv():
+    """CSV ফাইল থেকে শুধুমাত্র পূর্বে সেভ করা নোটিশের URL-গুলো লোড করে।"""
+    urls = set()
     if not os.path.exists(CSV_FILE_NAME):
-        return set()
-    with open(CSV_FILE_NAME, "r", newline="", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        try:
-            next(reader)  # Skip header
-        except StopIteration:
-            return set()
-        return {row[1] for row in reader if len(row) > 1}
+        return urls
+    try:
+        with open(CSV_FILE_NAME, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)  # হেডার স্কিপ করুন
+            for row in reader:
+                if len(row) > 1 and row[1].strip().startswith("http"):
+                    urls.add(row[1].strip())
+    except Exception as e:
+        print(f"❌ CSV ফাইল পড়তে সমস্যা: {e}")
+    return urls
 
-def append_to_csv(notice_title, url):
-    """Append new notice to CSV file"""
-    file_exists = os.path.exists(CSV_FILE_NAME)
-    with open(CSV_FILE_NAME, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["Notice Title", "URL"])
-        writer.writerow([notice_title, url])
 
-def safe_markdown(text):
-    """Escape special characters for Markdown"""
-    return re.sub(r'([_*[\]()~`>#+=|{}.!-])', r'\\\1', text)
+def append_notice_to_csv(notice):
+    """একটি নতুন নোটিশ CSV ফাইলে যোগ (append) করে।"""
+    file_exists = os.path.exists(CSV_FILE_NAME) and os.path.getsize(CSV_FILE_NAME) > 0
+    try:
+        with open(CSV_FILE_NAME, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["Notice Title", "URL"])  # ফাইল নতুন হলে হেডার যোগ করুন
+            writer.writerow([notice["title"], notice["url"]])
+    except Exception as e:
+        print(f"❌ CSV ফাইলে সেভ করতে সমস্যা: {e}")
 
-def send_telegram_notification(notice_title, notice_url):
-    """Send notification to all registered users"""
-    if not TELEGRAM_BOT_TOKEN:
-        print("⚠️ Telegram token not configured. Skipping notification")
-        return
 
+def safe_markdown_v2(text):
+    """টেলিগ্রামের MarkdownV2 এর জন্য বিশেষ ক্যারেক্টারগুলো এস্কেপ করে।"""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return "".join(f"\\{ch}" if ch in escape_chars else ch for ch in text)
+
+
+def send_telegram_notification(notice):
+    """সকল রেজিস্টার্ড ব্যবহারকারীকে একটি নতুন নোটিশ সম্পর্কে নোটিফিকেশন পাঠায়।"""
     user_ids = load_user_ids()
     if not user_ids:
-        print("🤷 No users registered to notify")
+        print("🤷‍♂️ নোটিফিকেশন পাঠানোর জন্য কোনো ব্যবহারকারী নেই।")
         return
 
-    # Create message
-    message = (
-        f"🔔 *NU published new notice named* {safe_markdown(notice_title)}\n\n"
-        f"📄 *Please check out the link then link provide korbe.*\n"
-        f"🔗 [View Notice]({notice_url})"
-    )
-    
-    print(f"✉️ Sending notification to {len(user_ids)} users...")
-    success = 0
-    fail = 0
+    title = safe_markdown_v2(notice['title'])
+    message = f"🔔 *নতুন নোটিশ*\n\n{title}\n\n🔗 [নোটিশ দেখুন]({notice['url']})"
 
+    print(f"✉️ {len(user_ids)} জন ব্যবহারকারীকে নোটিফিকেশন পাঠানো হচ্ছে...")
     for chat_id in user_ids:
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            data = {
-                'chat_id': chat_id,
-                'text': message,
-                'parse_mode': 'Markdown',
-                'disable_web_page_preview': True
-            }
-            response = requests.post(url, data=data, timeout=20)
-            response.raise_for_status()
-            success += 1
-            time.sleep(1)  # Rate limiting
+            response = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": message, "parse_mode": "MarkdownV2",
+                      "disable_web_page_preview": True},
+                timeout=10
+            )
+            if response.status_code != 200:
+                print(f"   - {chat_id} আইডিতে পাঠাতে ব্যর্থ: {response.text}")
+            time.sleep(0.5)
         except Exception as e:
-            fail += 1
-            print(f"❌ Failed to send to {chat_id}: {e}")
-    
-    print(f"    ✅ Sent to {success} users, ❌ Failed for {fail}")
+            print(f"   - {chat_id} আইডিতে পাঠাতে মারাত্মক ত্রুটি: {e}")
 
-# ---------- Scraper Functions ----------
 
 def scrape_nu_notices():
-    """Scrape notices from National University website"""
-    print("\n--- Step 1: Scraping NU Notices ---")
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(BASE_URL, timeout=600000)
+    """জাতীয় বিশ্ববিদ্যালয়ের ওয়েবসাইট থেকে প্রথম ৭০টি নোটিশ স্ক্র্যাপ করে।"""
+    print("\n--- জাতীয় বিশ্ববিদ্যালয়ের ওয়েবসাইট স্ক্র্যাপ করা হচ্ছে ---")
+    scraped_data = []
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(BASE_URL, timeout=120000)
+            page.wait_for_selector("table.customListTable", timeout=60000)
+            time.sleep(3)
 
-        # Wait for table to appear
-        page.wait_for_selector("table.customListTable")
-        time.sleep(2)
+            rows = page.locator("table.customListTable tbody tr")
+            count = min(rows.count(), 80)  # আপনি চাইলে এখানে সংখ্যা বাড়াতে বা কমাতে পারেন
+            print(f"ওয়েবসাইটে {rows.count()} টি নোটিশ পাওয়া গেছে, প্রথম {count} টি প্রসেস করা হচ্ছে।")
 
-        # Locate all rows
-        rows = page.locator("table.customListTable tbody tr")
-        total = rows.count()
-        limit = min(total, 70)  # Take first 70 notices
+            for i in range(count):
+                row = rows.nth(i)
+                title_element = row.locator("td:first-child")
+                link_element = title_element.locator("a")
 
-        all_data = []
-
-        for i in range(limit):
-            row = rows.nth(i)
-            tds = row.locator("td").all_inner_texts()
-            if tds:
-                notice_text = tds[0].strip().replace("\n", " ")
-                publish_date = tds[1].strip() if len(tds) > 1 else ""
-                
-                # Extract link from the first td
-                link_element = row.locator("td:first-child a")
-                href = link_element.get_attribute("href") if link_element.count() > 0 else ""
-                
-                # Check if it's a new notice (has new-news.gif image)
-                has_new_image = row.locator("img[src*='new-news.gif']").count() > 0
-                
-                if href and notice_text and has_new_image:
-                    # Convert relative URL to absolute URL
+                if link_element.count() > 0:
+                    title = title_element.inner_text().strip().replace("\n", " ")
+                    href = link_element.get_attribute("href")
                     full_url = urljoin(BASE_URL, href)
-                    
-                    all_data.append({
-                        "title": notice_text,
-                        "url": full_url,
-                        "date": publish_date
-                    })
-                    print(f"📰 Found new notice: {notice_text[:50]}...")
+                    scraped_data.append({"title": title, "url": full_url})
 
-        browser.close()
+            browser.close()
+        print(f"🎯 ওয়েবসাইট থেকে {len(scraped_data)} টি নোটিশ সফলভাবে স্ক্র্যাপ করা হয়েছে।")
+        return scraped_data
+    except Exception as e:
+        print(f"❌ স্ক্র্যাপিং করার সময় মারাত্মক ত্রুটি: {e}")
+        return []
 
-    print(f"🎯 Found {len(all_data)} new notices with new-news.gif")
-    return all_data
 
-# ---------- Main Function ----------
+# ---------- Main Logic ----------
 if __name__ == "__main__":
-    print("--- Starting NU Notice Scraper and Telegram Bot ---")
-    
-    # Step 1: Check for new Telegram users
-    print("\n--- Checking for New Telegram Users ---")
+    print("--- নোটিশ স্ক্র্যাপার এবং টেলিগ্রাম বট চালু হয়েছে ---")
+
+    # ধাপ ১: নতুন ব্যবহারকারীদের রেজিস্টার করুন (যদি থাকে)
     handle_telegram_updates()
 
-    # Step 2: Start scraping
-    all_new_notices = scrape_nu_notices()
+    # ধাপ ২: CSV থেকে আগে সেভ করা নোটিশের URL গুলো লোড করুন
+    previously_scraped_urls = load_scraped_urls_from_csv()
+    print(f"\n🔎 ডাটাবেজে ({CSV_FILE_NAME}) {len(previously_scraped_urls)} টি নোটিশের রেকর্ড পাওয়া গেছে।")
 
-    if not all_new_notices:
-        print("\n📭 No new notices found")
+    # ধাপ ৩: ওয়েবসাইট থেকে সর্বশেষ নোটিশগুলো স্ক্র্যাপ করুন
+    all_recent_notices = scrape_nu_notices()
+
+    if not all_recent_notices:
+        print("\n❌ ওয়েবসাইট থেকে কোনো নোটিশ স্ক্র্যাপ করা সম্ভব হয়নি। প্রোগ্রাম শেষ হচ্ছে।")
     else:
-        scraped_links = load_scraped_links_from_csv()
-        print(f"🔎 Already scraped: {len(scraped_links)} notices")
-        
-        # Filter new notices
-        new_notices_to_send = [
-            notice for notice in all_new_notices 
-            if notice["url"] not in scraped_links
-        ]
+        # ধাপ ৪: শুধুমাত্র নতুন নোটিশগুলো ফিল্টার করুন
+        new_notices = []
+        for notice in all_recent_notices:
+            if notice['url'] not in previously_scraped_urls:
+                new_notices.append(notice)
 
-        if not new_notices_to_send:
-            print("\n✅ No new notices to send")
+        if not new_notices:
+            print("\n✅ কোনো নতুন নোটিশ পাওয়া যায়নি। সবকিছু আপ-টু-ডেট আছে।")
         else:
-            print(f"\n--- Sending {len(new_notices_to_send)} New Notices ---")
-            for i, notice in enumerate(new_notices_to_send):
-                print(f"\n[{i+1}/{len(new_notices_to_send)}] {notice['title'][:50]}...")
-                
-                # Save to CSV
-                append_to_csv(notice["title"], notice["url"])
-                print(f"  💾 Saved to CSV")
-                
-                # Send Telegram notification
-                send_telegram_notification(notice["title"], notice["url"])
-                print(f"  📱 Notification sent")
+            print(f"\n✨ {len(new_notices)} টি নতুন নোটিশ পাওয়া গেছে!")
 
-    print("\n--- Mission Completed ---")
+            # নতুন নোটিশগুলোকে উল্টো করে প্রসেস করা হচ্ছে, যাতে পুরোনোটা আগে যায়
+            for notice in reversed(new_notices):
+                print(f"\nপ্রসেসিং: {notice['title'][:60]}...")
+
+                # ধাপ ৫: নতুন নোটিশটি CSV ফাইলে যোগ করুন
+                append_notice_to_csv(notice)
+                print("   - CSV ফাইলে সফলভাবে যোগ করা হয়েছে।")
+
+                # ধাপ ৬: ব্যবহারকারীদের কাছে নোটিফিকেশন পাঠান
+                send_telegram_notification(notice)
+
+    print("\n--- মিশন সম্পন্ন ---")
