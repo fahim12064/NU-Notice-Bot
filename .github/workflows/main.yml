@@ -1,4 +1,4 @@
-name: MobileDokan Scraper
+name: NU notice Scraper
 
 on:
   schedule:
