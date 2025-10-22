@@ -13,7 +13,6 @@ USER_IDS_FILE = "user_ids.json"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = "https://www.nu.ac.bd/"
 
-
 # ---------- Utility Functions ----------
 
 def load_user_ids():
@@ -29,31 +28,57 @@ def load_user_ids():
     except (FileNotFoundError, json.JSONDecodeError):
         return set()
 
-
 def save_user_ids(user_ids):
     """Save user IDs to JSON file"""
     with open(USER_IDS_FILE, "w") as f:
         json.dump(list(user_ids), f, indent=2)
 
+def load_last_update_data():
+    """Load last update ID and user data from file"""
+    last_update_file = "last_update_id.txt"
+    if not os.path.exists(last_update_file):
+        return 0, {}
+    
+    try:
+        with open(last_update_file, "r") as f:
+            lines = f.readlines()
+            if not lines:
+                return 0, {}
+            
+            last_update_id = int(lines[0].strip())
+            user_data = {}
+            
+            for line in lines[1:]:
+                if line.strip():
+                    parts = line.strip().split(',', 1)
+                    if len(parts) == 2:
+                        chat_id, name = parts
+                        user_data[chat_id] = name
+            
+            return last_update_id, user_data
+    except Exception as e:
+        print(f"Error reading last update data: {e}")
+        return 0, {}
+
+def save_last_update_data(last_update_id, user_data):
+    """Save last update ID and user data to file"""
+    last_update_file = "last_update_id.txt"
+    try:
+        with open(last_update_file, "w") as f:
+            f.write(str(last_update_id) + "\n")
+            for chat_id, name in user_data.items():
+                f.write(f"{chat_id},{name}\n")
+    except Exception as e:
+        print(f"Error saving last update data: {e}")
 
 def handle_telegram_updates():
-    """Handle new Telegram users"""
+    """Handle new Telegram users and save their data"""
     if not TELEGRAM_BOT_TOKEN:
         print("⚠️ Telegram bot token not set")
         return
 
     user_ids = load_user_ids()
-    last_update_file = "last_update_id.txt"
-
-    # Read last update ID
-    if os.path.exists(last_update_file):
-        try:
-            with open(last_update_file, "r") as f:
-                last_update_id = int(f.read().strip() or 0)
-        except ValueError:
-            last_update_id = 0
-    else:
-        last_update_id = 0
+    last_update_id, user_data = load_last_update_data()
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=10"
 
@@ -77,7 +102,7 @@ def handle_telegram_updates():
         msg = update.get("message", {})
         text = msg.get("text", "")
         chat = msg.get("chat", {})
-        chat_id = chat.get("id")
+        chat_id = str(chat.get("id"))
         first_name = msg.get("from", {}).get("first_name", "Friend")
 
         if not chat_id or not text:
@@ -86,6 +111,7 @@ def handle_telegram_updates():
         if text.strip().lower() == "/start":
             if chat_id not in user_ids:
                 user_ids.add(chat_id)
+                user_data[chat_id] = first_name
                 new_users_found = True
                 print(f"✅ New user registered: {chat_id} ({first_name})")
 
@@ -109,12 +135,9 @@ def handle_telegram_updates():
         save_user_ids(user_ids)
         print(f"💾 Saved {len(user_ids)} total users to user_ids.json")
 
-    # Save last update ID
-    with open(last_update_file, "w") as f:
-        f.write(str(max_update_id))
-
-    print("✅ Telegram updates handled successfully")
-
+    # Save last update ID and user data
+    save_last_update_data(max_update_id, user_data)
+    print("✅ Telegram updates and user data saved successfully")
 
 def load_scraped_links_from_csv():
     """Load scraped links from CSV file"""
@@ -128,7 +151,6 @@ def load_scraped_links_from_csv():
             return set()
         return {row[1] for row in reader if len(row) > 1}
 
-
 def append_to_csv(notice_title, url):
     """Append new notice to CSV file"""
     file_exists = os.path.exists(CSV_FILE_NAME)
@@ -138,11 +160,9 @@ def append_to_csv(notice_title, url):
             writer.writerow(["Notice Title", "URL"])
         writer.writerow([notice_title, url])
 
-
 def safe_markdown(text):
     """Escape special characters for Markdown"""
     return re.sub(r'([_*[\]()~`>#+=|{}.!-])', r'\\\1', text)
-
 
 def send_telegram_notification(notice_title, notice_url):
     """Send notification to all registered users"""
@@ -161,7 +181,7 @@ def send_telegram_notification(notice_title, notice_url):
         f"📄 *Please check out the link then link provide korbe.*\n"
         f"🔗 [View Notice]({notice_url})"
     )
-
+    
     print(f"✉️ Sending notification to {len(user_ids)} users...")
     success = 0
     fail = 0
@@ -182,16 +202,15 @@ def send_telegram_notification(notice_title, notice_url):
         except Exception as e:
             fail += 1
             print(f"❌ Failed to send to {chat_id}: {e}")
-
+    
     print(f"    ✅ Sent to {success} users, ❌ Failed for {fail}")
-
 
 # ---------- Scraper Functions ----------
 
 def scrape_nu_notices():
     """Scrape notices from National University website"""
     print("\n--- Step 1: Scraping NU Notices ---")
-
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
@@ -214,18 +233,18 @@ def scrape_nu_notices():
             if tds:
                 notice_text = tds[0].strip().replace("\n", " ")
                 publish_date = tds[1].strip() if len(tds) > 1 else ""
-
+                
                 # Extract link from the first td
                 link_element = row.locator("td:first-child a")
                 href = link_element.get_attribute("href") if link_element.count() > 0 else ""
-
+                
                 # Check if it's a new notice (has new-news.gif image)
                 has_new_image = row.locator("img[src*='new-news.gif']").count() > 0
-
+                
                 if href and notice_text and has_new_image:
                     # Convert relative URL to absolute URL
                     full_url = urljoin(BASE_URL, href)
-
+                    
                     all_data.append({
                         "title": notice_text,
                         "url": full_url,
@@ -238,11 +257,10 @@ def scrape_nu_notices():
     print(f"🎯 Found {len(all_data)} new notices with new-news.gif")
     return all_data
 
-
 # ---------- Main Function ----------
 if __name__ == "__main__":
     print("--- Starting NU Notice Scraper and Telegram Bot ---")
-
+    
     # Step 1: Check for new Telegram users
     print("\n--- Checking for New Telegram Users ---")
     handle_telegram_updates()
@@ -255,10 +273,10 @@ if __name__ == "__main__":
     else:
         scraped_links = load_scraped_links_from_csv()
         print(f"🔎 Already scraped: {len(scraped_links)} notices")
-
+        
         # Filter new notices
         new_notices_to_send = [
-            notice for notice in all_new_notices
+            notice for notice in all_new_notices 
             if notice["url"] not in scraped_links
         ]
 
@@ -267,12 +285,12 @@ if __name__ == "__main__":
         else:
             print(f"\n--- Sending {len(new_notices_to_send)} New Notices ---")
             for i, notice in enumerate(new_notices_to_send):
-                print(f"\n[{i + 1}/{len(new_notices_to_send)}] {notice['title'][:50]}...")
-
+                print(f"\n[{i+1}/{len(new_notices_to_send)}] {notice['title'][:50]}...")
+                
                 # Save to CSV
                 append_to_csv(notice["title"], notice["url"])
                 print(f"  💾 Saved to CSV")
-
+                
                 # Send Telegram notification
                 send_telegram_notification(notice["title"], notice["url"])
                 print(f"  📱 Notification sent")
